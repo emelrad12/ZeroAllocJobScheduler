@@ -81,7 +81,6 @@ internal class Worker
                 // Pass jobs to the local queue
                 while (_queue.Size() < 16 && _incomingQueue.TryDequeue(out var jobHandle))
                 {
-                    if (jobHandle == null) throw new InvalidOperationException("JobHandle is null");
                     _queue.PushBottom(jobHandle);
                 }
 
@@ -101,6 +100,7 @@ internal class Worker
                         {
                             continue;
                         }
+
                         exists = _jobScheduler.Queues[i].TrySteal(out job);
                         if (!exists)
                         {

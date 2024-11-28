@@ -48,8 +48,6 @@ public partial class JobScheduler : IDisposable
     /// </summary>
     internal List<Worker> Workers { get; } = new();
 
-    internal JobHandlePool JobHandlePool { get; } = new(20000);
-
     /// <summary>
     /// An index pointing towards the next worker being used to process the next flushed <see cref="IJob"/>.
     /// </summary>
@@ -61,53 +59,10 @@ public partial class JobScheduler : IDisposable
     /// <param name="iJob">The <see cref="IJob"/>.</param>
     /// <param name="pooled">Whether the handle should be pooled or not</param>
     /// <returns>The new created <see cref="JobHandle"/>.</returns>
-    public JobHandle Schedule(IJob iJob, bool pooled = true)
+    public JobHandle Schedule(IJob iJob)
     {
-        if (!pooled)
-        {
-            return new(iJob);
-        }
-
-        if (!JobHandlePool.GetHandle(out var handle))
-        {
-            return new(iJob);
-        }
-
-        handle!.ReinitializeWithJob(iJob);
-        return handle;
+        return JobHandle._pool.GetNewHandle(iJob);
     }
-
-    public JobHandle? ScheduleAndFlushPooledJobWithGeneration(IJob iJob, int generation)
-    {
-        var hasJob = JobHandlePool.GetHandle(out var handle);
-        if(!hasJob)
-        {
-            return null;
-        }
-        handle.ReinitializeWithJob(iJob);
-        handle!.generation = generation;
-        FlushOrAwaitGeneration(handle!);
-        return handle;
-    }
-
-    public int GetNewGeneration()
-    {
-        return Interlocked.Increment(ref JobHandlePool.Generation);
-    }
-
-    public bool CheckIfAllPooledJobsInGenerationAreComplete(int generation)
-    {
-        foreach (var job in JobHandlePool._handles)
-        {
-            if (job.generation == generation && job._unfinishedJobs > 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
 
     public void TryToExecuteRemainingJobs(int max = 0)
     {
@@ -129,14 +84,6 @@ public partial class JobScheduler : IDisposable
             }
         }
     }
-    public void AwaitForGeneration(int generation)
-    {
-        while (!CheckIfAllPooledJobsInGenerationAreComplete(generation))
-        {
-            // Steal jobs and process them on the main.
-            TryToExecuteRemainingJobs();
-        }
-    }
 
     /// <summary>
     /// Creates a new <see cref="JobHandle"/> from a <see cref="IJob"/> with a <see cref="JobHandle"/> as a parent.
@@ -148,7 +95,7 @@ public partial class JobScheduler : IDisposable
     public JobHandle Schedule(IJob iJob, JobHandle parent)
     {
         Interlocked.Increment(ref parent._unfinishedJobs);
-
+        parent._unfinishedJobs++;
         var job = new JobHandle(
             iJob,
             parent
@@ -234,9 +181,9 @@ public partial class JobScheduler : IDisposable
             return;
         }
 
-        if (job._parent != null)
+        if (job._parent != ushort.MaxValue)
         {
-            Finish(job._parent);
+            Finish(new(job._parent));
         }
 
         if (job.HasDependencies())
@@ -249,7 +196,7 @@ public partial class JobScheduler : IDisposable
         }
 
         Interlocked.Decrement(ref job._unfinishedJobs);
-        JobHandlePool.ReturnHandle(job);
+        JobHandle._pool.ReleaseHandle(job);
     }
 
     /// <summary>

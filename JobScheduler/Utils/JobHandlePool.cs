@@ -2,21 +2,20 @@ namespace Schedulers.Utils;
 
 internal class JobHandlePool
 {
-    public readonly JobHandle[] _handles;
+    public readonly ushort[] _handles;
     private readonly bool[] _isFree;
-    private readonly Queue<int> _freeHandles;
+    private readonly Queue<ushort> _freeHandles;
     private int _returnedHandles;
-    public int Generation;
 
     public JobHandlePool(int size)
     {
         _freeHandles = new(size);
-        _handles = new JobHandle[size];
+        _handles = new ushort[size];
         _isFree = new bool[size];
 
-        for (var i = 0; i < size; i++)
+        for (ushort i = 0; i < size; i++)
         {
-            _handles[i] = new(i);
+            _handles[i] = i;
             _freeHandles.Enqueue(i);
             _isFree[i] = true;
         }
@@ -32,7 +31,7 @@ internal class JobHandlePool
         }
 
         _freeHandles.Clear();
-        for (var i = 0; i < _isFree.Length; i++)
+        for (ushort i = 0; i < _isFree.Length; i++)
         {
             if (_isFree[i])
             {
@@ -45,7 +44,7 @@ internal class JobHandlePool
 
     // Not intrinsically thread safe so we lock
     // Assumption is that the user won't generate handles on other threads
-    internal bool GetHandle(out JobHandle? handle)
+    internal bool GetHandle(out ushort? handle)
     {
         // lock (this)
         {
@@ -70,13 +69,7 @@ internal class JobHandlePool
     //Thread safe
     internal void ReturnHandle(JobHandle handle)
     {
-        // It means the handle is not ours
-        if (handle.index == -1)
-        {
-            return;
-        }
-
-        _isFree[handle.index] = true;
+        _isFree[handle._index] = true;
         _returnedHandles++; // We don't care about thread safety here
     }
 }

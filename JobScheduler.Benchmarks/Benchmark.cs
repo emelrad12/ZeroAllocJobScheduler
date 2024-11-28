@@ -30,38 +30,34 @@ public class HeavyCalculationJob : IJob
     }
 }
 
-public class Benchmark
+public class TimerJob
 {
-    private static void BenchA()
+    private Stopwatch timer;
+
+    public TimerJob()
     {
-        var timer = Stopwatch.StartNew();
-        using var jobScheduler = new JobScheduler();
-        for (var sindex = 0; sindex < 100; sindex++)
-        {
-            var generation = jobScheduler.GetNewGeneration();
-            for (var index = 0; index < 20000; index++)
-            {
-                var job = new HeavyCalculationJob(index, index);
-                jobScheduler.ScheduleAndFlushPooledJobWithGeneration(job, generation);
-            }
-
-            jobScheduler.AwaitForGeneration(generation);
-        }
-
-        var time = timer.ElapsedMilliseconds;
-        Console.WriteLine($"Time: {time}ms");
+        timer = Stopwatch.StartNew();
     }
 
+    public void End(int jobs)
+    {
+        var time = timer.ElapsedMilliseconds;
+        Console.WriteLine($"Job scheduler Time: {time}ms, Jobs: {jobs}, jobs per second {jobs / ((double)time / 1000) / 1_000_000}M");
+    }
+}
+
+public class Benchmark
+{
     private static void BenchB()
     {
         using var jobScheduler = new JobScheduler();
-        var timer = Stopwatch.StartNew();
+        var timer = new TimerJob();
         for (var sindex = 0; sindex < 100; sindex++)
         {
             List<JobHandle> _jobHandles = new();
             for (var index = 0; index < 20000; index++)
             {
-                var job = new HeavyCalculationJob(index, index);
+                var job = new CalculationJob(index, index);
                 var handle = jobScheduler.Schedule(job);
                 _jobHandles.Add(handle);
             }
@@ -70,8 +66,8 @@ public class Benchmark
             jobScheduler.Wait(_jobHandles.AsSpan());
         }
 
-        var time = timer.ElapsedMilliseconds;
-        Console.WriteLine($"Job scheduler Time: {time}ms");
+        timer.End(20000 * 100);
+        CalculationJob._result = 0;
     }
 
     private static void BenchC()
@@ -95,18 +91,17 @@ public class Benchmark
 
     private static void BenchD()
     {
-        var timer = Stopwatch.StartNew();
+        var timer = new TimerJob();
         for (var sindex = 0; sindex < 100; sindex++)
         {
             Parallel.For(0, 20000, i =>
             {
-                var job = new HeavyCalculationJob(i, i);
+                var job = new CalculationJob(i, i);
                 job.Execute();
             });
         }
 
-        var time = timer.ElapsedMilliseconds;
-        Console.WriteLine($"Parallel for Time: {time}ms");
+        timer.End(20000 * 100);
     }
 
     private static void Main(string[] args)
@@ -131,7 +126,7 @@ public class Benchmark
         {
             BenchB();
             // BenchC();
-            // BenchD();
+            BenchD();
         }
         //using var jobScheduler = new JobScheduler();
 

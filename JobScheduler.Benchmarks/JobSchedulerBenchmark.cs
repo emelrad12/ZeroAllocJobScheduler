@@ -6,21 +6,19 @@ namespace Schedulers.Benchmarks;
 
 public class CalculationJob : IJob
 {
-    private readonly int _first;
-    private readonly int _second;
-    public static volatile int Result;
-    public static int a;
-
+    private int _first;
+    private int _second;
+    public static int _result;
     public CalculationJob(int first, int second)
     {
-        this._first = first;
-        this._second = second;
+        _first = first;
+        _second = second;
     }
 
     public void Execute()
     {
-        Result = _first + _second;
-        Interlocked.Increment(ref a);
+        // _first += _second;
+        Interlocked.Increment(ref _result);
     }
 }
 
@@ -70,17 +68,5 @@ public class JobSchedulerBenchmark
             var job = new HeavyCalculationJob(i, i);
             job.Execute();
         });
-    }
-
-    [Benchmark]
-    public void BenchmarkJobSchedulerNoAlloc()
-    {
-        var generation = _jobScheduler.GetNewGeneration();
-        for (var index = 0; index < Jobs; index++)
-        {
-            var job = new HeavyCalculationJob(index, index);
-            _jobScheduler.ScheduleAndFlushPooledJobWithGeneration(job, generation);
-        }
-        _jobScheduler.AwaitForGeneration(generation);
     }
 }
