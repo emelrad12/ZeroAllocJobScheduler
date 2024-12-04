@@ -22,7 +22,7 @@ public class HeavyCalculationJob : IJob
 
     public void Execute()
     {
-        for (var i = 0; i < 2000; i++)
+        for (var i = 0; i < 50; i++)
         {
             _first = double.Sqrt(_second);
             _second = double.Sqrt(_first) + 1;
@@ -48,35 +48,39 @@ public class TimerJob
 
 public class Benchmark
 {
+    private const int jobCount = 2000;
+    private const int loopCount = 100;
+
     private static void BenchB()
     {
         using var jobScheduler = new JobScheduler();
         var timer = new TimerJob();
-        for (var sindex = 0; sindex < 100; sindex++)
+        for (var sindex = 0; sindex < loopCount; sindex++)
         {
-            List<JobHandle> _jobHandles = new();
-            for (var index = 0; index < 20000; index++)
+            var parentHandle = new JobHandle();
+            Interlocked.Decrement(ref parentHandle._unfinishedJobs);
+            for (var index = 0; index < jobCount; index++)
             {
-                var job = new CalculationJob(index, index);
+                var job = new HeavyCalculationJob(index, index);
                 var handle = jobScheduler.Schedule(job);
-                _jobHandles.Add(handle);
+                jobScheduler.Flush(handle);
+                handle._mainDependency = parentHandle._index;
+                Interlocked.Increment(ref parentHandle._unfinishedJobs);
             }
 
-            jobScheduler.Flush(_jobHandles.AsSpan());
-            jobScheduler.Wait(_jobHandles.AsSpan());
+            jobScheduler.Wait(parentHandle);
         }
 
-        timer.End(20000 * 100);
-        CalculationJob._result = 0;
+        timer.End(jobCount * loopCount);
     }
 
     private static void BenchC()
     {
-        var timer = Stopwatch.StartNew();
-        for (var sindex = 0; sindex < 100; sindex++)
+        var timer = new TimerJob();
+        for (var sindex = 0; sindex < loopCount; sindex++)
         {
             var list = new List<HeavyCalculationJob>();
-            for (var index = 0; index < 20000; index++)
+            for (var index = 0; index < jobCount; index++)
             {
                 var job = new HeavyCalculationJob(index, index);
                 list.Add(job);
@@ -85,23 +89,22 @@ public class Benchmark
             Parallel.ForEach(list, job => job.Execute());
         }
 
-        var time = timer.ElapsedMilliseconds;
-        Console.WriteLine($"Parallel foreach Time: {time}ms");
+        timer.End(jobCount * loopCount);
     }
 
     private static void BenchD()
     {
         var timer = new TimerJob();
-        for (var sindex = 0; sindex < 100; sindex++)
+        for (var sindex = 0; sindex < loopCount; sindex++)
         {
-            Parallel.For(0, 20000, i =>
+            Parallel.For(0, jobCount, i =>
             {
-                var job = new CalculationJob(i, i);
+                var job = new HeavyCalculationJob(i, i);
                 job.Execute();
             });
         }
 
-        timer.End(20000 * 100);
+        timer.End(jobCount * loopCount);
     }
 
     private static void Main(string[] args)
@@ -116,16 +119,10 @@ public class Benchmark
         // config = config.WithOptions(ConfigOptions.DisableOptimizationsValidator);
         // BenchmarkRunner.Run<JobSchedulerBenchmark>(config);
         // return;
-        // var jb = new JobSchedulerBenchmark();
-        // jb.Setup();
-        // jb.Jobs = 512;
-        // jb.BenchmarkJobSchedulerNoAlloc();
-        // jb.Cleanup();
-        // return;
         for (int i = 0; i < 10; i++)
         {
             BenchB();
-            // BenchC();
+            BenchC();
             BenchD();
         }
         //using var jobScheduler = new JobScheduler();

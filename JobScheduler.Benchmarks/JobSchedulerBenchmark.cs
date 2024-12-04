@@ -4,7 +4,7 @@ using Schedulers.Utils;
 
 namespace Schedulers.Benchmarks;
 
-public class CalculationJob : IJob
+public struct CalculationJob : IJob
 {
     private int _first;
     private int _second;
@@ -18,7 +18,7 @@ public class CalculationJob : IJob
     public void Execute()
     {
         // _first += _second;
-        Interlocked.Increment(ref _result);
+        // Interlocked.Increment(ref _result);
     }
 }
 
@@ -51,7 +51,7 @@ public class JobSchedulerBenchmark
     {
         for (var index = 0; index < Jobs; index++)
         {
-            var job = new HeavyCalculationJob(index, index);
+            var job = new CalculationJob(index, index);
             var handle = _jobScheduler.Schedule(job);
             _jobHandles.Add(handle);
         }
@@ -65,7 +65,7 @@ public class JobSchedulerBenchmark
     {
         Parallel.For(0, Jobs, i =>
         {
-            var job = new HeavyCalculationJob(i, i);
+            var job = new CalculationJob(i, i);
             job.Execute();
         });
     }

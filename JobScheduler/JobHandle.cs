@@ -32,6 +32,7 @@ public class JobHandleSoaPool
             _unfinishedJobs = 1,
             _dependencies = null,
             _parent = ushort.MaxValue,
+            _mainDependency = ushort.MaxValue,
             _job = iJob
         };
     }
@@ -39,6 +40,11 @@ public class JobHandleSoaPool
     public void ReleaseHandle(JobHandle handle)
     {
         freeIds.ReturnHandle(handle);
+    }
+
+    public void DecrementUnfinished(ushort jobMainDependency)
+    {
+        Interlocked.Decrement(ref _unfinishedJobs[jobMainDependency]);
     }
 }
 

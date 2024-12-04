@@ -175,6 +175,10 @@ public partial class JobScheduler : IDisposable
     /// <param name="job"></param>
     internal void Finish(JobHandle job)
     {
+        if (job._mainDependency != ushort.MaxValue)
+        {
+            JobHandle._pool.DecrementUnfinished(job._mainDependency);
+        }
         var unfinishedJobs = Interlocked.Decrement(ref job._unfinishedJobs);
         if (unfinishedJobs != 0)
         {
