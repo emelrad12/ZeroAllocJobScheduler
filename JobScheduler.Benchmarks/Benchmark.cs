@@ -1,9 +1,5 @@
 using System.Diagnostics;
 using System.Numerics;
-using BenchmarkDotNet.Jobs;
-using BenchmarkDotNet.Toolchains.CsProj;
-using BenchmarkDotNet.Toolchains.InProcess.NoEmit;
-using CommunityToolkit.HighPerformance;
 using Schedulers;
 using Schedulers.Benchmarks;
 using Schedulers.Utils;
@@ -14,7 +10,6 @@ public struct EmptyJob : IJob
 {
     public void Execute()
     {
-
     }
 }
 
@@ -69,7 +64,7 @@ public struct HeavyCalculationJob : IJob, IParallelJobProducer
 
     public void Execute()
     {
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < 10; i++)
         {
             _first = double.Sqrt(_second);
             _second = double.Sqrt(_first) + 1;
@@ -86,7 +81,7 @@ public struct HeavyCalculationJob : IJob, IParallelJobProducer
 
     public void RunSingle(int index)
     {
-        throw new NotImplementedException();
+        Execute();
     }
 }
 
@@ -105,7 +100,7 @@ public struct TestCorrectnessJob : IParallelJobProducer
 
     public void RunSingle(int index)
     {
-        if (!acceptsNewEntries) throw new("Should not accept new entries");
+        if (!acceptsNewEntries) throw new($"Should not accept new entries {index}");
         var newValue = Interlocked.Increment(ref total);
         // Console.WriteLine($" {index} {newValue}");
     }
@@ -131,24 +126,26 @@ public class JobTimer
 
 public class Benchmark
 {
-    private const int jobCount = 200000;
-    private const int loopCount = 100;
+    private const int jobCount = 200;
+    private const int loopCount = 100000;
 
     private static void CorrectnessTestJob()
     {
-        using var jobScheduler = new JobScheduler();
         var timer = new JobTimer();
         for (var sindex = 0; sindex < loopCount; sindex++)
         {
             TestCorrectnessJob.total = 0;
             TestCorrectnessJob.acceptsNewEntries = true;
-            var job = new ParallelJobProducer<TestCorrectnessJob>(jobCount, new(), jobScheduler);
-            jobScheduler.Wait(job.GetHandle());
-            TestCorrectnessJob.acceptsNewEntries = false;
-            var expected = jobCount;
-            if (TestCorrectnessJob.total != expected)
+            var job = new ParallelJobProducer<TestCorrectnessJob>(0, jobCount, new());
+            ParallelForJobCommon.GlobalScheduler.Flush(job.GetHandle());
+            ParallelForJobCommon.GlobalScheduler.Wait(job.GetHandle());
+            // Thread.Sleep(1);
+            // Console.WriteLine($"UnfinishedJobs {job.GetHandle().UnfinishedJobs} total {TestCorrectnessJob.total}");
+            // TestCorrectnessJob.acceptsNewEntries = false;
+            var total = TestCorrectnessJob.total;
+            if (total != jobCount)
             {
-                throw new($"{TestCorrectnessJob.total} != {expected}");
+                throw new($"{total} != {jobCount}");
             }
         }
 
@@ -166,8 +163,7 @@ public class Benchmark
             {
                 var job = new HeavyCalculationJob(index, index);
                 var handle = jobScheduler.Schedule(job);
-                handle.Parent = parentHandle.Index;
-                handle.SetDependsOn(parentHandle);
+                handle.SetParent(parentHandle);
                 jobScheduler.Flush(handle);
             }
 
@@ -178,50 +174,31 @@ public class Benchmark
         timer.End(jobCount * loopCount, "Every calculation job is its own handle");
     }
 
-    private static void BenchC()
+    private static long BenchVector(bool useVector)
     {
-        using var jobScheduler = new JobScheduler();
-        var timer = new JobTimer();
-        for (var sindex = 0; sindex < loopCount; sindex++)
-        {
-            var job = new ParallelJobProducer<HeavyCalculationJob>(jobCount, new(), jobScheduler);
-            jobScheduler.Wait(job.GetHandle());
-        }
-
-        timer.End(jobCount * loopCount, "ParallelJobProducer");
-    }
-
-    private static void BenchD()
-    {
-        var timer = new JobTimer();
-        for (var sindex = 0; sindex < loopCount; sindex++)
-        {
-            Parallel.For(0, jobCount, i =>
-            {
-                var job = new HeavyCalculationJob(i, i);
-                job.Execute();
-            });
-        }
-
-        timer.End(jobCount * loopCount, "Just Parallel.For");
-    }
-
-    private static long BenchVector(bool dontUseVector)
-    {
-        using var jobScheduler = new JobScheduler();
         var timer = new JobTimer();
         var data = new VectorCalculationJob { a = new float[jobCount], b = new float[jobCount], result = new float[jobCount], Repetitions = 500 };
+        var parentJob = ParallelForJobCommon.GlobalScheduler.Schedule();
         for (var sindex = 0; sindex < loopCount; sindex++)
         {
-            var job = new ParallelJobProducer<VectorCalculationJob>(jobCount, data, jobScheduler, 16, !dontUseVector);
-            jobScheduler.Wait(job.GetHandle());
+            var job = new ParallelJobProducer<VectorCalculationJob>(0, jobCount, data, loopSize: 16, onlySingle: !useVector);
+            job.GetHandle().SetParent(parentJob);
+            ParallelForJobCommon.GlobalScheduler.Flush(job.GetHandle());
         }
-
-        return timer.End(jobCount * loopCount, $"Use vector: {!dontUseVector}");
+        ParallelForJobCommon.GlobalScheduler.Flush(parentJob);
+        ParallelForJobCommon.GlobalScheduler.Wait(parentJob);
+        return timer.End(jobCount * loopCount, $"Use vector: {useVector}");
     }
 
     private static void Main(string[] args)
     {
+        ParallelJobBenchmark.Benchmark();
+        return;
+        ParallelForJobCommon.SetScheduler(new());
+        // new JobHierarchyTest();
+        // ParallelForJobCommon.DisposeScheduler();
+        // return;
+
         // var config = DefaultConfig.Instance.AddJob(Job.Default
         //     .WithWarmupCount(2)
         //     .WithMinIterationCount(10)
@@ -232,16 +209,24 @@ public class Benchmark
         // config = config.WithOptions(ConfigOptions.DisableOptimizationsValidator);
         // BenchmarkRunner.Run<JobSchedulerBenchmark>(config);
         // return;
-        for (var i = 0;; i++)
+        var continiousRatio = 0d;
+        for (var i = 0; i < 200000; i++)
         {
             // CorrectnessTestJob();
             // BenchB();
-            // BenchC();
-            // BenchD();
-            var vectorized = BenchVector(true);
-            var nonVectorized = BenchVector(false);
-            Console.WriteLine($"Ratio {(double)nonVectorized / vectorized}");
+            // var vectorized = BenchVector(true);
+            // var nonVectorized = BenchVector(false);
+            // var ratio = (double)nonVectorized / vectorized;
+            // Console.WriteLine($"Ratio {ratio}");
+            // continiousRatio += ratio;
+            // if (i % 10 == 0)
+            {
+                Console.WriteLine($"Continious ratio: {continiousRatio / (i + 1)}");
+            }
+            Thread.Sleep(1);
         }
+        ParallelForJobCommon.DisposeScheduler();
+
         //using var jobScheduler = new JobScheduler();
 
         // Spawn massive jobs and wait for finish

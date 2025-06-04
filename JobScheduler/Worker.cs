@@ -1,4 +1,5 @@
-﻿using Schedulers.Utils;
+﻿using System.Runtime.InteropServices;
+using Schedulers.Utils;
 
 namespace Schedulers;
 
@@ -11,36 +12,43 @@ internal class Worker
     private readonly int _workerId;
     private readonly Thread _thread;
 
-    private readonly UnorderedThreadSafeQueue<JobHandle> _incomingQueue;
-    private readonly WorkStealingDeque<JobHandle> _queue;
+    /// <summary>
+    /// Use a single combined <see cref="UnorderedThreadSafeQueue{T}"/> for all <see cref="Worker"/>s to enqueue <see cref="JobHandle"/>s.
+    /// Because there really isn't performance advantage to having multiple queues for each <see cref="Worker"/>,
+    /// </summary>
+    public static readonly UnorderedThreadSafeQueue<JobHandle> _incomingQueue = new();
 
+    private readonly WorkStealingDeque<JobHandle> _queue;
     private readonly JobScheduler _jobScheduler;
     private volatile CancellationTokenSource _cancellationToken;
+    public bool IsCurrentlyWorking { get; private set; } = false;
+
+    // use a high spin count to avoid sleeping the thread under variable load.
+    // 2047 is the maximum value for a ManualResetEventSlim spin count.
+    private readonly static ManualResetEventSlim _workAvailable = new(false, 2047);
 
     /// <summary>
     /// Creates a new <see cref="Worker"/>.
     /// </summary>
     /// <param name="jobScheduler">Its <see cref="JobScheduler"/>.</param>
-    /// <param name="id">Its <see cref="id"/>.</param>
+    /// <param name="id">Its <see cref="_workerId"/>.</param>
     public Worker(JobScheduler jobScheduler, int id)
     {
         _workerId = id;
 
-        _incomingQueue = new();
         _queue = new(32);
-
         _jobScheduler = jobScheduler;
         _cancellationToken = new();
 
         _thread = new(() => Run(_cancellationToken.Token));
+        _thread.Name = $"Arch Worker #{_workerId}";
     }
 
-    /// <summary>
-    /// Its <see cref="UnorderedThreadSafeQueue{T}"/> with <see cref="JobHandle"/>s which are transferred into the <see cref="Queue"/>.
-    /// </summary>
-    public UnorderedThreadSafeQueue<JobHandle> IncomingQueue
+    public static bool Enqueue(JobHandle handle)
     {
-        get => _incomingQueue;
+        var result = _incomingQueue.TryEnqueue(handle);
+        _workAvailable.Set();
+        return result;
     }
 
     /// <summary>
@@ -65,6 +73,17 @@ internal class Worker
     public void Stop()
     {
         _cancellationToken.Cancel();
+        _workAvailable.Set();
+    }
+
+    /// <summary>
+    /// Try to get a job from the <see cref="_incomingQueue"/> and remove it from the queue.
+    /// As this method is most likely used on a wait, it also tries to flush the <see cref="_bulkQueue"/> first,
+    /// to prevent deadlocks, when the thread #0 is waiting for jobs to be enqueued, but it is also the one supposed to be quickly enqueuing jobs into the queue.
+    /// </summary>
+    public static bool TryStealJobExternal(out JobHandle job)
+    {
+        return _incomingQueue.TryDequeue(out job);
     }
 
     /// <summary>
@@ -78,18 +97,22 @@ internal class Worker
         {
             while (!token.IsCancellationRequested)
             {
+                var noWorkFound = true;
                 // Pass jobs to the local queue
                 while (_queue.Size() < 32 && _incomingQueue.TryDequeue(out var jobHandle))
                 {
                     _queue.PushBottom(jobHandle);
+                    noWorkFound = false;
                 }
 
                 // Process job in own queue
                 var exists = _queue.TryPopBottom(out var job);
                 if (exists)
                 {
-                    job.Job.Execute();
+                    IsCurrentlyWorking = true;
+                    job.Job?.Execute();
                     _jobScheduler.Finish(job);
+                    noWorkFound = false;
                 }
                 else
                 {
@@ -106,16 +129,27 @@ internal class Worker
                         {
                             continue;
                         }
-
-                        job.Job.Execute();
+                        IsCurrentlyWorking = true;
+                        job.Job?.Execute();
                         _jobScheduler.Finish(job);
+                        noWorkFound = false;
                         break;
                     }
+                }
 
-                    if (!exists)
+                if (noWorkFound)
+                {
+                    IsCurrentlyWorking = false;
+                    // Keep a small fleet of threads always ready to work.
+                    // But don't use all the cpu power on yields.
+                    if (_workerId < 0)
                     {
-                        // No work found, yield to give other threads a chance
                         Thread.Yield();
+                    }
+                    else
+                    {
+                        _workAvailable.Reset();
+                        _workAvailable.Wait(100, token);
                     }
                 }
             }

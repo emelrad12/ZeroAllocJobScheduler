@@ -1,5 +1,4 @@
-﻿using Arch.Benchmarks;
-using CommunityToolkit.HighPerformance;
+﻿using CommunityToolkit.HighPerformance;
 using Schedulers.Utils;
 
 namespace Schedulers.Benchmarks;
@@ -9,6 +8,7 @@ public struct CalculationJob : IJob
     private int _first;
     private int _second;
     public static int _result;
+
     public CalculationJob(int first, int second)
     {
         _first = first;
@@ -35,8 +35,8 @@ public class JobSchedulerBenchmark
     [IterationSetup]
     public void Setup()
     {
-        _jobScheduler = new JobScheduler();
-        _jobHandles = new List<JobHandle>(Jobs);
+        _jobScheduler = new();
+        _jobHandles = new(Jobs);
     }
 
     [IterationCleanup]

@@ -1,6 +1,4 @@
-﻿using System.Diagnostics;
-
-namespace Schedulers.Test;
+﻿namespace Schedulers.Test;
 
 /*
 [TestFixture]

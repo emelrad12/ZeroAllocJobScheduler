@@ -1,5 +1,3 @@
-using System.Diagnostics.Contracts;
-
 namespace Schedulers.Utils;
 
 /// <summary>
@@ -14,17 +12,18 @@ public interface IParallelJobProducer
     /// </summary>
     /// <param name="start">Index if the item you should start using</param>
     /// <param name="end">Exclusive end of the range</param>
-    [Pure]
     public void RunVectorized(int start, int end)
     {
-        throw new NotImplementedException();
+        for (var i = start; i < end; i++)
+        {
+            RunSingle(i);
+        }
     }
 
     /// <summary>
     /// This is for the remaining items that are not vectorized
     /// </summary>
     /// <param name="index">The current item to be processed</param>
-    [Pure]
     public void RunSingle(int index)
     {
         throw new NotImplementedException();
@@ -36,56 +35,76 @@ public interface IParallelJobProducer
 /// </summary>
 /// <typeparam name="T">Type of the </typeparam>
 /// <remarks>The reason we pass T instead of just IParallelJobProducer is because the compiler otherwise cannot inline it</remarks>
-public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProducer
+public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
 {
     private int _from;
     private readonly int _to;
     private readonly T _producer;
-    private bool _shouldSplitWhenAvailable;
-    private readonly JobScheduler _scheduler;
     private readonly JobHandle _selfHandle;
+    private readonly JobHandle _sourceHandle;
     private readonly bool _onlySingle;
     private readonly int _loopSize;
 
     /// <summary>
     /// Creates a new <see cref="ParallelJobProducer{T}"/>.
     /// </summary>
+    /// <param name="from">Where the loop starts</param>
     /// <param name="to">Maximum to loop to</param>
     /// <param name="producer">The job to call</param>
-    /// <param name="scheduler">The scheduler where the jobs should be put</param>
+    /// <param name="source"></param>
     /// <param name="loopSize">Size of the loop, useful for when you want to use vectorization</param>
     /// <param name="onlySingle">Makes sure you can ignore the end parameter in the IParallelJobProducer, and use start as index</param>
-    public ParallelJobProducer(int to, T producer, JobScheduler scheduler, int loopSize = 16, bool onlySingle = false)
+    /// <param name="singleThreaded">Whether the job producer should not spawn children</param>
+    public ParallelJobProducer(int from, int to, T producer, int loopSize = 16, bool onlySingle = false, JobHandle source = default, bool singleThreaded = false)
     {
-        _from = 0;
+        _sourceHandle = source;
+        _from = from;
         _to = to;
         _producer = producer;
-        _shouldSplitWhenAvailable = true;
-        _scheduler = scheduler;
         _onlySingle = onlySingle;
         _loopSize = loopSize;
-        _selfHandle = _scheduler.Schedule(this);
-        _scheduler.Flush(_selfHandle);
+        if (_to - _from == 0)
+        {
+            throw new ArgumentException($"Invalid range from {_from} to {_to}");
+        }
+        if (to - from == 1)
+        {
+            singleThreaded = true; // If the range is only 1, we can just run it single threaded
+        }
+
+        _selfHandle = ParallelForJobCommon.GlobalScheduler!.Schedule(singleThreaded ? this : null);
+        if (!source.IsNull)
+        {
+            _selfHandle.SetDependsOn(source);
+        }
+
+        if (!singleThreaded)
+        {
+            CheckAndSplit();
+        }
     }
 
     //Only used to spawn sub-jobs
-    private ParallelJobProducer(T producer, JobScheduler scheduler, JobHandle parent, int start, int end, int loopSize, bool onlySingle)
+    private ParallelJobProducer(T producer, JobHandle parent, int start, int end, int loopSize, bool onlySingle, JobHandle source)
     {
         _producer = producer;
-        _shouldSplitWhenAvailable = false;
-        _scheduler = scheduler;
         _from = start;
         _to = end;
+        if (_to - _from == 0)
+        {
+            throw new ArgumentException($"Invalid range from {_from} to {_to}");
+        }
         _loopSize = loopSize;
         _onlySingle = onlySingle;
-        _selfHandle = _scheduler.Schedule(this, parent);
-        _scheduler.Flush(_selfHandle);
+        _selfHandle = ParallelForJobCommon.GlobalScheduler!.Schedule(this, parent);
+        if (!source.IsNull)
+        {
+            _selfHandle.SetDependsOn(source);
+        }
     }
 
     /// <summary>
     /// Executes the job.
-    /// If external thread overwrites the <see cref="_shouldSplitWhenAvailable"/> to true, it will split the job into multiple children.
-    /// The current job will stop executing and the children will be scheduled.
     /// </summary>
     public void Execute()
     {
@@ -100,11 +119,6 @@ public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProduce
         // Also caching CheckAndSplit is pointless as this should be the last iteration
         if (isSignificantRange && !_onlySingle)
         {
-            if (CheckAndSplit())
-            {
-                return;
-            }
-
             for (; _from < _to - (_loopSize - 1); _from += _loopSize)
             {
                 _producer.RunVectorized(_from, _from + _loopSize);
@@ -113,11 +127,6 @@ public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProduce
 
         for (; _from < _to; _from++)
         {
-            if (CheckAndSplit())
-            {
-                return;
-            }
-
             _producer.RunSingle(_from);
         }
     }
@@ -128,7 +137,9 @@ public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProduce
     /// <returns>The amount.</returns>
     private int CalculateChildrenToSplitInto()
     {
-        const int ChildrenToSplitInto = 128; //This should be equal to the number of threads(or that times 2/3?) but for now it's just a constant
+        // If you change this also change the bulk queue segment size.
+        // This should be equal to the number of threads(or that times 2/3?) but for now it's just a constant
+        var ChildrenToSplitInto = 24;
         var range = _to - _from;
         return range < ChildrenToSplitInto ? range : ChildrenToSplitInto;
     }
@@ -139,13 +150,12 @@ public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProduce
     /// <returns>If a split occured</returns>
     private bool CheckAndSplit()
     {
-        if (!_shouldSplitWhenAvailable || CalculateChildrenToSplitInto() <= 1)
+        if (CalculateChildrenToSplitInto() <= 1)
         {
             return false;
         }
 
         Split();
-        _shouldSplitWhenAvailable = false;
         return true;
     }
 
@@ -155,17 +165,24 @@ public class ParallelJobProducer<T> : IJob where T : struct, IParallelJobProduce
     /// <exception cref="Exception">An exception occuring when an invalid range was passed.</exception>
     private void Split()
     {
+        if (_selfHandle.IsJobEligibleForExecution())
+        {
+            throw new InvalidOperationException("Tried to split a job that is already eligible for execution. You should split before flushing the job.");
+        }
+
         var childrenToSplitInto = CalculateChildrenToSplitInto();
+        BulkQueue<JobHandle>.Segment segment = default;
+
         for (var i = 0; i < childrenToSplitInto; i++)
         {
-            var start = _from + ((_to - _from) * i / childrenToSplitInto);
-            var end = _from + ((_to - _from) * (i + 1) / childrenToSplitInto);
+            var start = (int)(_from + (((long)_to - _from) * i / childrenToSplitInto));
+            var end = (int)(_from + (((long)_to - _from) * (i + 1) / childrenToSplitInto));
             if (end - start < 1)
             {
                 throw new($"Invalid range from {start} to {end}");
             }
 
-            new ParallelJobProducer<T>(_producer, _scheduler, _selfHandle, start, end, _loopSize, _onlySingle);
+            new ParallelJobProducer<T>(_producer, _selfHandle, start, end, _loopSize, _onlySingle, _sourceHandle)._selfHandle.Flush();
         }
     }
 

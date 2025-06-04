@@ -1,11 +1,14 @@
 ﻿namespace Schedulers.Utils;
 
+/// <summary>
+/// Adds extension methods for the <see cref="JobScheduler"/> class.
+/// </summary>
 public static class JobSchedulerExtensions
 {
-
     /// <summary>
     ///     Transfers a collection of <see cref="JobHandle"/> instances to the <see cref="Worker"/> so that they can be executed.
     /// </summary>
+    /// <param name="jobScheduler"></param>
     /// <param name="jobs">A span of <see cref="JobHandle"/> instances to be distributed.</param>
     public static void Flush(this JobScheduler jobScheduler, Span<JobHandle> jobs)
     {
@@ -38,7 +41,7 @@ public static class JobSchedulerExtensions
             var allJobsFinished = true;
             for (var i = 0; i < jobs.Length; i++)
             {
-                if (jobs[i].UnfinishedJobs > 0)
+                if (!jobs[i].IsFinished())
                 {
                     allJobsFinished = false;
                     break;
@@ -59,7 +62,11 @@ public static class JobSchedulerExtensions
                     continue;
                 }
 
-                stolenJob.Job.Execute();
+                if (stolenJob.Job != null)
+                {
+                    stolenJob.Job.Execute();
+                }
+
                 jobScheduler.Finish(stolenJob);
             }
         }

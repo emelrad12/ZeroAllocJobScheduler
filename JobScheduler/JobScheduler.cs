@@ -1,9 +1,3 @@
-using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using Schedulers.Utils;
-
 [assembly: CLSCompliant(true)]
 
 namespace Schedulers;
@@ -11,12 +5,14 @@ namespace Schedulers;
 /// <summary>
 ///     A <see cref="JobScheduler"/> schedules and processes <see cref="IJob"/>s asynchronously. Better-suited for larger jobs due to its underlying events.
 /// </summary>
-public partial class JobScheduler : IDisposable
+public class JobScheduler : IDisposable
 {
     /// <summary>
     /// Creates an instance and singleton.
     /// </summary>
-    /// <param name="threads">The amount of worker threads to use. If zero we will use the amount of processors available.</param>
+    /// <param name="threads">The amount of worker threads to use.
+    /// If zero we will use the amount of processors available.
+    /// Any negative value means no threads. Useful for debugging/testing.</param>
     public JobScheduler(int threads = 0)
     {
         var amount = threads;
@@ -53,40 +49,16 @@ public partial class JobScheduler : IDisposable
     /// </summary>
     internal int NextWorkerIndex { get; set; }
 
+    public static int totalRequested;
     /// <summary>
     /// Creates a new <see cref="JobHandle"/> from a <see cref="IJob"/>.
     /// </summary>
     /// <param name="iJob">The <see cref="IJob"/>.</param>
-    /// <param name="pooled">Whether the handle should be pooled or not</param>
     /// <returns>The new created <see cref="JobHandle"/>.</returns>
-    public JobHandle Schedule(IJob iJob)
+    public JobHandle Schedule(IJob? iJob = null)
     {
+        totalRequested++;
         return JobHandle.Pool.RentJobHandle(iJob);
-    }
-
-    /// <summary>
-    /// This is similar to wait but doesn't require a job handle, and allow limiting execution to a certain amount of jobs.
-    /// </summary>
-    /// <param name="max">The maximum amount of jobs that will be executed, 0 means unlimited</param>
-    public void TryToExecuteRemainingJobs(int max = 0)
-    {
-        var totalExecuted = 0;
-        for (var i = 0; i < Workers.Count; i++)
-        {
-            var nextJob = Workers[i].Queue.TrySteal(out var stolenJob);
-            if (!nextJob)
-            {
-                continue;
-            }
-
-            stolenJob.Job.Execute();
-            Finish(stolenJob);
-            totalExecuted++;
-            if (max > 0 && totalExecuted >= max)
-            {
-                return;
-            }
-        }
     }
 
     /// <summary>
@@ -96,11 +68,23 @@ public partial class JobScheduler : IDisposable
     /// <param name="iJob">The <see cref="IJob"/>.</param>
     /// <param name="parent">The parent <see cref="JobHandle"/>.</param>
     /// <returns>The new <see cref="JobHandle"/>.</returns>
-    public JobHandle Schedule(IJob iJob, JobHandle parent)
+    public JobHandle Schedule(IJob? iJob, JobHandle parent)
     {
-        Interlocked.Increment(ref parent.UnfinishedJobs);
+        totalRequested++;
         var job = JobHandle.Pool.RentJobHandle(iJob);
-        job.Parent = parent.Index;
+        job.SetParent(parent);
+        return job;
+    }
+
+    /// <summary>
+    /// Schedule a new <see cref="JobHandle"/> with a parent <see cref="JobHandle"/>.
+    /// Simple a helper function to avoid writing (null, parent) every time.
+    /// </summary>
+    public JobHandle Schedule(JobHandle parent)
+    {
+        totalRequested++;
+        var job = JobHandle.Pool.RentJobHandle();
+        job.SetParent(parent);
         return job;
     }
 
@@ -113,24 +97,53 @@ public partial class JobScheduler : IDisposable
     /// <param name="dependOn">The <see cref="JobHandle"/> it depends on.</param>
     public void AddDependency(JobHandle dependency, JobHandle dependOn)
     {
-        dependOn.GetDependencies().Add(dependency);
+        dependency.SetDependsOn(dependOn);
     }
 
+    /// <summary>
+    /// A function that calculates the current thread usage of the <see cref="Workers"/>.
+    /// It is very simple and just counts the amount of <see cref="Worker"/>s that are currently working.
+    /// </summary>
+    /// <returns>a value between 0 - 1</returns>
+    public float CalculateThreadUsage()
+    {
+        var total = 0f;
+        foreach (var worker in Workers)
+        {
+            total += worker.IsCurrentlyWorking ? 1 : 0;
+        }
+
+        total /= Workers.Count;
+        return total;
+    }
 
     /// <summary>
-    /// Transfers a <see cref="JobHandle"/> to the <see cref="Workers"/> so that it can be executed.
+    /// Tries to transfer <see cref="JobHandle"/> to the <see cref="Workers"/> so that it can be executed.
+    /// If it has unfinished children it will not be flushed, and instead will be left for the children to flush.
     /// </summary>
     /// <param name="job">The <see cref="JobHandle"/>.</param>
     public void Flush(JobHandle job)
     {
-        // Round Robin,
-        var workerIndex = NextWorkerIndex;
-        while (!Workers[workerIndex].IncomingQueue.TryEnqueue(job))
+        // This is to prevent the job from being flushed multiple times.
+        var unfinishedJobs = job.SetReadyToExecute();
+
+        if (unfinishedJobs != 1)
         {
-            NextWorkerIndex = (NextWorkerIndex + 1) % Workers.Count;
+            return;
         }
 
-        NextWorkerIndex = (NextWorkerIndex + 1) % Workers.Count;
+        // It is pointless to flush a job that has no work to do.
+        // This is a job that triggers other jobs,
+        // so might as well do it now, to lower latency.
+        if (job.Job == null)
+        {
+            Finish(job);
+            return;
+        }
+
+        while (!Worker.Enqueue(job))
+        {
+        }
     }
 
     /// <summary>
@@ -140,55 +153,88 @@ public partial class JobScheduler : IDisposable
     /// <param name="job">The <see cref="JobHandle"/>.</param>
     public void Wait(JobHandle job)
     {
-        while (job.UnfinishedJobs > 0)
+        while (!job.IsFinished())
         {
-            for (var i = 0; i < Workers.Count; i++)
+            var nextJob = Worker.TryStealJobExternal(out var stolenJob);
+            if (!nextJob)
             {
-                var nextJob = Workers[i].Queue.TrySteal(out var stolenJob);
-                if (!nextJob)
+                for (var i = 0; i < Workers.Count; i++)
                 {
-                    continue;
+                    nextJob = Workers[i].Queue.TrySteal(out stolenJob);
+                    if (nextJob)
+                    {
+                        break;
+                    }
                 }
+            }
 
-                stolenJob.Job.Execute();
+            if (nextJob)
+            {
+                stolenJob.Job?.Execute();
                 Finish(stolenJob);
+            }
+
+            // Dont yield if you can find something to execute.
+            if (!nextJob)
+            {
+                Thread.Yield();
             }
         }
     }
 
     /// <summary>
-    /// Completely ends a <see cref="JobHandle"/> and his children by cleaning it up.
-    /// Transfers dependencies and has them executed.
+    ///
     /// </summary>
-    /// <param name="job"></param>
-    internal void Finish(JobHandle job)
+    /// <param name="handle">The job handle to finish</param>
+    private void OnChildFinish(JobHandle handle)
     {
-        var unfinishedJobs = Interlocked.Decrement(ref job.UnfinishedJobs);
-        if (unfinishedJobs != 0)
+        var unfinishedJobs = Interlocked.Decrement(ref handle.UnfinishedJobs);
+        if (unfinishedJobs < 1)
         {
-            return;
+            throw new InvalidOperationException($"Unfinished jobs cannot be negative, id:{handle.Index} job: {handle.Job == null}, unfinished jobs: {unfinishedJobs}");
         }
 
-        if (job.Parent != ushort.MaxValue)
+        if (unfinishedJobs == 1)
         {
-            Finish(new(job.Parent));
+            Worker.Enqueue(handle);
+            // handle.Job?.Execute();
+            // Finish(handle);
+        }
+    }
+
+    /// <summary>
+    /// Finalizes a <see cref="JobHandle"/> and processes its dependencies.
+    /// </summary>
+    /// <param name="handle">The job handle to finish</param>
+    internal void Finish(JobHandle handle)
+    {
+        if (handle.UnfinishedJobs != 1)
+        {
+            throw new($"Finish called on a job with {handle.UnfinishedJobs} != 1 unfinished jobs, id:{handle.Index} job: {handle.Job == null}");
         }
 
-        if (job.HasDependencies())
+        if (handle.Parent != JobHandle.NullHandleId)
         {
-            for (var index = 0; index < job.GetDependencies().Count; index++)
+            OnChildFinish(new(handle.Parent));
+        }
+
+        if (handle.HasDependents())
+        {
+            var dependents = handle.GetDependents();
+            foreach (var id in dependents)
             {
-                var nextJob = job.GetDependencies()[index];
-                Flush(nextJob);
+                if (id == JobHandle.NullHandleId)
+                {
+                    continue;
+                }
+
+                OnChildFinish(new(id));
             }
         }
 
-        if(job.UnfinishedJobs <0)
-        {
-            throw new InvalidOperationException("Unfinished jobs cannot be negative");
-        }
+        Interlocked.Decrement(ref handle.UnfinishedJobs);
 
-        JobHandle.Pool.ReturnHandle(job);
+        JobHandle.Pool.ReturnHandle(handle);
     }
 
     /// <summary>

@@ -53,8 +53,8 @@ internal class JobSchedulerTests
         jobScheduler.Flush(handle1);
         jobScheduler.Flush(handle2);
 
-        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromSeconds(5));
-        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromSeconds(5));
+        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromMilliseconds(50));
+        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromMilliseconds(50));
 
         IsTrue(job1CompletedFlag, "Job1 did not complete in time.");
         IsTrue(job2CompletedFlag, "Job2 did not complete in time.");
@@ -80,8 +80,8 @@ internal class JobSchedulerTests
 
         jobScheduler.Flush(handle2);
 
-        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromSeconds(5));
-        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromSeconds(5));
+        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromMilliseconds(5));
+        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromMilliseconds(5));
 
         IsFalse(job1CompletedFlag, "Job1 did not complete in time.");
         IsTrue(job2CompletedFlag, "Job2 did not complete in time.");
@@ -111,8 +111,8 @@ internal class JobSchedulerTests
         // Waits on handle1 to ensure both handles ran
         jobScheduler.Wait(handle1);
 
-        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromSeconds(5));
-        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromSeconds(5));
+        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromMilliseconds(5));
+        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromMilliseconds(5));
 
         IsTrue(job1CompletedFlag, "Job1 did not complete in time.");
         IsTrue(job2CompletedFlag, "Job2 did not complete in time.");
@@ -142,8 +142,8 @@ internal class JobSchedulerTests
         // Waits on handle1 to ensure both handles ran
         jobScheduler.Wait(handle1, handle2);
 
-        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromSeconds(5));
-        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromSeconds(5));
+        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromMilliseconds(5));
+        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromMilliseconds(5));
 
         IsTrue(job1CompletedFlag, "Job1 did not complete in time.");
         IsTrue(job2CompletedFlag, "Job2 did not complete in time.");
@@ -161,17 +161,69 @@ internal class JobSchedulerTests
         var job1 = new TestJob(1, () => { job1Completed.Set(); });
         var job2 = new TestJob(2, () => { job2Completed.Set(); });
 
-        // Job2 should finish after Job1 since its his child.
+        // Job2 should finish after Job1 since it's his child.
         var handle1 = jobScheduler.Schedule(job1);
         var handle2 = jobScheduler.Schedule(job2);
         jobScheduler.AddDependency(handle2, handle1);
 
         jobScheduler.Flush(handle1);
+        jobScheduler.Flush(handle2);
 
-        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromSeconds(5));
-        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromSeconds(10));
+        var job1CompletedFlag = job1Completed.WaitOne(TimeSpan.FromMilliseconds(5));
+        var job2CompletedFlag = job2Completed.WaitOne(TimeSpan.FromMilliseconds(10));
 
         IsTrue(job1CompletedFlag, "Job1 did not complete in time.");
         IsTrue(job2CompletedFlag, "Job2 did not complete in time.");
+    }
+
+    [Test]
+    public void OneMoreDependencyThanNodeLimitSize()
+    {
+        using var jobScheduler = new JobScheduler();
+        var sourceJob = jobScheduler.Schedule();
+        var targetJob = jobScheduler.Schedule();
+        for (var i = 0; i < 9; i++)
+        {
+            var midJob = jobScheduler.Schedule();
+            targetJob.SetDependsOn(midJob);
+            midJob.SetDependsOn(sourceJob);
+            jobScheduler.Flush(midJob);
+        }
+
+        jobScheduler.Flush(targetJob);
+        jobScheduler.Flush(sourceJob);
+        jobScheduler.Wait(targetJob);
+    }
+
+    [Test]
+    public void ManyMoreDependencyThanNodeLimitSize()
+    {
+        using var jobScheduler = new JobScheduler();
+        Parallel.For(0, 100, _ =>
+        {
+            var sourceJob = jobScheduler.Schedule();
+            var targetJob = jobScheduler.Schedule();
+            for (var i = 0; i < 90; i++)
+            {
+                var midJob = jobScheduler.Schedule();
+                targetJob.SetDependsOn(midJob);
+                midJob.SetDependsOn(sourceJob);
+                jobScheduler.Flush(midJob);
+            }
+
+            jobScheduler.Flush(targetJob);
+            jobScheduler.Flush(sourceJob);
+            jobScheduler.Wait(targetJob);
+        });
+    }
+
+    [Test]
+    public void TryToEditAJobThatIsReadyToExecute()
+    {
+        using var jobScheduler = new JobScheduler();
+        var newJob = jobScheduler.Schedule();
+        newJob.UnfinishedJobs--;
+        Throws<InvalidOperationException>(() => newJob.SetParent(new()));
+        Throws<InvalidOperationException>(() => newJob.SetDependsOn(new()));
     }
 }
