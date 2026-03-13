@@ -140,17 +140,8 @@ internal class Worker
                 if (noWorkFound)
                 {
                     IsCurrentlyWorking = false;
-                    // Keep a small fleet of threads always ready to work.
-                    // But don't use all the cpu power on yields.
-                    if (_workerId < 0)
-                    {
-                        Thread.Yield();
-                    }
-                    else
-                    {
-                        _workAvailable.Reset();
-                        _workAvailable.Wait(100, token);
-                    }
+                    _workAvailable.Reset();
+                    _workAvailable.Wait(100, token);
                 }
             }
         }

@@ -44,6 +44,7 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     private readonly JobHandle _sourceHandle;
     private readonly bool _onlySingle;
     private readonly int _loopSize;
+    private static readonly int ChildrenToSplitInto = Environment.ProcessorCount * 2;
 
     /// <summary>
     /// Creates a new <see cref="ParallelJobProducer{T}"/>.
@@ -139,7 +140,6 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     {
         // If you change this also change the bulk queue segment size.
         // This should be equal to the number of threads(or that times 2/3?) but for now it's just a constant
-        var ChildrenToSplitInto = 24;
         var range = _to - _from;
         return range < ChildrenToSplitInto ? range : ChildrenToSplitInto;
     }
