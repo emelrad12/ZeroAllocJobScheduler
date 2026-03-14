@@ -10,4 +10,12 @@ public interface IJob
     /// Is called by a thread at a certain time to execute the job.
     /// </summary>
     void Execute();
+
+    /// <summary>
+    /// Returns a user-friendly name of the job.
+    /// </summary>
+    string GetName()
+    {
+        return GetType().FullName;
+    }
 }

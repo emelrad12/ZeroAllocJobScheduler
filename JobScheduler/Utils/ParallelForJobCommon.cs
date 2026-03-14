@@ -6,7 +6,17 @@ namespace Schedulers.Utils;
 public static class ParallelForJobCommon
 {
     internal static JobScheduler? GlobalScheduler;
+    internal static bool ProfilingEnabled;
 
+    public static void EnableProfiling()
+    {
+        ProfilingEnabled = true;
+    }
+
+    public static void DisableProfiling()
+    {
+        ProfilingEnabled = false;
+    }
     /// <summary>
     /// Sets the default scheduler for parallel jobs.
     /// </summary>

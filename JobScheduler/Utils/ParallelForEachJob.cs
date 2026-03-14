@@ -17,6 +17,11 @@ public static class ParallelForEachJob
                 action(enumerator.Current);
             }
         }
+
+        public string GetName()
+        {
+            return action.Method.DeclaringType?.FullName ?? "Unknown";
+        }
     }
 
     /// <summary>

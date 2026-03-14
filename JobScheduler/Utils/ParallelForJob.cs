@@ -11,6 +11,11 @@ public static class ParallelForJob
         {
             action(index);
         }
+
+        public string GetName()
+        {
+            return action.Method.DeclaringType?.FullName ?? "Unknown";
+        }
     }
 
     /// <summary>

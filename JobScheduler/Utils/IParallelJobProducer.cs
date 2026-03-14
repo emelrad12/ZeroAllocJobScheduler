@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Schedulers.Utils;
 
 /// <summary>
@@ -28,6 +30,11 @@ public interface IParallelJobProducer
     {
         throw new NotImplementedException();
     }
+
+    string GetName()
+    {
+        return GetType().FullName;
+    }
 }
 
 /// <summary>
@@ -45,6 +52,12 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     private readonly bool _onlySingle;
     private readonly int _loopSize;
     private static readonly int ChildrenToSplitInto = Environment.ProcessorCount * 8;
+
+    /// <inheritdoc />
+    public string GetName()
+    {
+        return _producer.GetName();
+    }
 
     /// <summary>
     /// Creates a new <see cref="ParallelJobProducer{T}"/>.

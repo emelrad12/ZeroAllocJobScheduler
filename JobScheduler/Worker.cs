@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Diagnostics;
 using Schedulers.Utils;
 
 namespace Schedulers;
@@ -9,7 +9,7 @@ namespace Schedulers;
 /// </summary>
 internal class Worker
 {
-    private readonly int _workerId;
+    public readonly int WorkerId;
     private readonly Thread _thread;
 
     /// <summary>
@@ -26,22 +26,23 @@ internal class Worker
     // use a high spin count to avoid sleeping the thread under variable load.
     // 2047 is the maximum value for a ManualResetEventSlim spin count.
     private readonly static ManualResetEventSlim _workAvailable = new(false, 2047);
+    public readonly Queue<WorkerPerformanceEvent> PerformanceEvents = new(10_000_000);
 
     /// <summary>
     /// Creates a new <see cref="Worker"/>.
     /// </summary>
     /// <param name="jobScheduler">Its <see cref="JobScheduler"/>.</param>
-    /// <param name="id">Its <see cref="_workerId"/>.</param>
+    /// <param name="id">Its <see cref="WorkerId"/>.</param>
     public Worker(JobScheduler jobScheduler, int id)
     {
-        _workerId = id;
+        WorkerId = id;
 
         _queue = new(32);
         _jobScheduler = jobScheduler;
         _cancellationToken = new();
 
         _thread = new(() => Run(_cancellationToken.Token));
-        _thread.Name = $"Arch Worker #{_workerId}";
+        _thread.Name = $"Arch Worker #{WorkerId}";
     }
 
     public static bool Enqueue(JobHandle handle)
@@ -97,6 +98,7 @@ internal class Worker
         {
             while (!token.IsCancellationRequested)
             {
+                var profilingEnabled = ParallelForJobCommon.ProfilingEnabled;
                 var noWorkFound = true;
                 // Pass jobs to the local queue
                 while (_queue.Size() < 32 && _incomingQueue.TryDequeue(out var jobHandle))
@@ -105,21 +107,32 @@ internal class Worker
                     noWorkFound = false;
                 }
 
+                var currentPerformanceEvent = new WorkerPerformanceEvent();
                 // Process job in own queue
                 var exists = _queue.TryPopBottom(out var job);
                 if (exists)
                 {
-                    IsCurrentlyWorking = true;
+                    if (profilingEnabled)
+                    {
+                        currentPerformanceEvent = new() { workerId = WorkerId, jobType = job.Job, startTimeStamp = Stopwatch.GetTimestamp() };
+                        IsCurrentlyWorking = true;
+                    }
+
                     job.Job?.Execute();
                     _jobScheduler.Finish(job);
                     noWorkFound = false;
+                    if (profilingEnabled)
+                    {
+                        currentPerformanceEvent.endTimeStamp = Stopwatch.GetTimestamp();
+                        PerformanceEvents.Enqueue(currentPerformanceEvent);
+                    }
                 }
                 else
                 {
                     // Try to steal job from different queue
                     for (var i = 0; i < _jobScheduler.Queues.Count; i++)
                     {
-                        if (i == _workerId)
+                        if (i == WorkerId)
                         {
                             continue;
                         }
@@ -129,9 +142,21 @@ internal class Worker
                         {
                             continue;
                         }
-                        IsCurrentlyWorking = true;
+
+                        if (profilingEnabled)
+                        {
+                            currentPerformanceEvent = new() { workerId = WorkerId, jobType = job.Job, startTimeStamp = Stopwatch.GetTimestamp() };
+                            IsCurrentlyWorking = true;
+                        }
+
                         job.Job?.Execute();
                         _jobScheduler.Finish(job);
+                        if (profilingEnabled)
+                        {
+                            currentPerformanceEvent.endTimeStamp = Stopwatch.GetTimestamp();
+                            PerformanceEvents.Enqueue(currentPerformanceEvent);
+                        }
+
                         noWorkFound = false;
                         break;
                     }
@@ -139,7 +164,11 @@ internal class Worker
 
                 if (noWorkFound)
                 {
-                    IsCurrentlyWorking = false;
+                    if (profilingEnabled)
+                    {
+                        IsCurrentlyWorking = false;
+                    }
+
                     _workAvailable.Reset();
                     _workAvailable.Wait(100, token);
                 }
