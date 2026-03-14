@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Contracts;
 using Schedulers.Utils;
 
 namespace Schedulers;
@@ -430,6 +431,7 @@ public struct JobHandle
     /// <summary>
     /// If the job is eligible for execution, and that means it should be somewhere in the queue waiting to be picked up by a worker.
     /// </summary>
+    [Pure]
     public bool IsJobEligibleForExecution()
     {
         return UnfinishedJobs == 1;

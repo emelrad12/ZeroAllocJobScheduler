@@ -44,7 +44,7 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     private readonly JobHandle _sourceHandle;
     private readonly bool _onlySingle;
     private readonly int _loopSize;
-    private static readonly int ChildrenToSplitInto = Environment.ProcessorCount * 2;
+    private static readonly int ChildrenToSplitInto = Environment.ProcessorCount * 8;
 
     /// <summary>
     /// Creates a new <see cref="ParallelJobProducer{T}"/>.

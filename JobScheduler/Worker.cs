@@ -16,7 +16,7 @@ internal class Worker
     /// Use a single combined <see cref="UnorderedThreadSafeQueue{T}"/> for all <see cref="Worker"/>s to enqueue <see cref="JobHandle"/>s.
     /// Because there really isn't performance advantage to having multiple queues for each <see cref="Worker"/>,
     /// </summary>
-    public static readonly UnorderedThreadSafeQueue<JobHandle> _incomingQueue = new();
+    private static readonly UnorderedThreadSafeQueue<JobHandle> _incomingQueue = new();
 
     private readonly WorkStealingDeque<JobHandle> _queue;
     private readonly JobScheduler _jobScheduler;

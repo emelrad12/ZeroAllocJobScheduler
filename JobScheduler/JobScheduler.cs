@@ -49,7 +49,6 @@ public class JobScheduler : IDisposable
     /// </summary>
     internal int NextWorkerIndex { get; set; }
 
-    public static int totalRequested;
     /// <summary>
     /// Creates a new <see cref="JobHandle"/> from a <see cref="IJob"/>.
     /// </summary>
@@ -57,7 +56,6 @@ public class JobScheduler : IDisposable
     /// <returns>The new created <see cref="JobHandle"/>.</returns>
     public JobHandle Schedule(IJob? iJob = null)
     {
-        totalRequested++;
         return JobHandle.Pool.RentJobHandle(iJob);
     }
 
@@ -70,7 +68,6 @@ public class JobScheduler : IDisposable
     /// <returns>The new <see cref="JobHandle"/>.</returns>
     public JobHandle Schedule(IJob? iJob, JobHandle parent)
     {
-        totalRequested++;
         var job = JobHandle.Pool.RentJobHandle(iJob);
         job.SetParent(parent);
         return job;
@@ -82,7 +79,6 @@ public class JobScheduler : IDisposable
     /// </summary>
     public JobHandle Schedule(JobHandle parent)
     {
-        totalRequested++;
         var job = JobHandle.Pool.RentJobHandle();
         job.SetParent(parent);
         return job;
