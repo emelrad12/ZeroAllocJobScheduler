@@ -1,21 +1,15 @@
-﻿namespace Schedulers;
+﻿using Schedulers.Utils;
+
+namespace Schedulers;
 
 /// <summary>
 /// The <see cref="IJob"/> interface
 /// represents a job that can be packed into the queue and is executed by a thread at a specific time.
 /// </summary>
-public interface IJob
+public interface IJob : IHasName
 {
     /// <summary>
     /// Is called by a thread at a certain time to execute the job.
     /// </summary>
     void Execute();
-
-    /// <summary>
-    /// Returns a user-friendly name of the job.
-    /// </summary>
-    string GetName()
-    {
-        return GetType().FullName;
-    }
 }

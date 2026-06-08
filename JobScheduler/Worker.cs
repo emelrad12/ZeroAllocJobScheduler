@@ -98,7 +98,7 @@ internal class Worker
         {
             while (!token.IsCancellationRequested)
             {
-                var profilingEnabled = ParallelForJobCommon.ProfilingEnabled;
+                var profilingEnabled = SchedulerCommon.ProfilingEnabled;
                 var noWorkFound = true;
                 // Pass jobs to the local queue
                 while (_queue.Size() < 32 && _incomingQueue.TryDequeue(out var jobHandle))
@@ -112,20 +112,22 @@ internal class Worker
                 var exists = _queue.TryPopBottom(out var job);
                 if (exists)
                 {
-                    if (profilingEnabled)
+                    var shouldProfile = profilingEnabled && job.Job != null;
+                    if (shouldProfile)
                     {
                         currentPerformanceEvent = new() { workerId = WorkerId, jobType = job.Job, startTimeStamp = Stopwatch.GetTimestamp() };
                         IsCurrentlyWorking = true;
                     }
 
                     job.Job?.Execute();
-                    _jobScheduler.Finish(job);
-                    noWorkFound = false;
-                    if (profilingEnabled)
+                    if (shouldProfile)
                     {
                         currentPerformanceEvent.endTimeStamp = Stopwatch.GetTimestamp();
                         PerformanceEvents.Enqueue(currentPerformanceEvent);
                     }
+
+                    _jobScheduler.Finish(job);
+                    noWorkFound = false;
                 }
                 else
                 {
@@ -143,20 +145,21 @@ internal class Worker
                             continue;
                         }
 
-                        if (profilingEnabled)
+                        var shouldProfile = profilingEnabled && job.Job != null;
+                        if (shouldProfile)
                         {
                             currentPerformanceEvent = new() { workerId = WorkerId, jobType = job.Job, startTimeStamp = Stopwatch.GetTimestamp() };
                             IsCurrentlyWorking = true;
                         }
 
                         job.Job?.Execute();
-                        _jobScheduler.Finish(job);
-                        if (profilingEnabled)
+                        if (shouldProfile)
                         {
                             currentPerformanceEvent.endTimeStamp = Stopwatch.GetTimestamp();
                             PerformanceEvents.Enqueue(currentPerformanceEvent);
                         }
 
+                        _jobScheduler.Finish(job);
                         noWorkFound = false;
                         break;
                     }

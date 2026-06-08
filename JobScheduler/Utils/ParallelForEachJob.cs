@@ -20,7 +20,7 @@ public static class ParallelForEachJob
 
         public string GetName()
         {
-            return action.Method.DeclaringType?.FullName ?? "Unknown";
+            return (action.Method.DeclaringType?.FullName ?? "Unknown") + "." + action.Method.Name;
         }
     }
 

@@ -322,7 +322,7 @@ public struct JobHandle
     /// </summary>
     public JobHandle Wait()
     {
-        ParallelForJobCommon.GlobalScheduler!.Wait(this);
+        SchedulerCommon.GlobalScheduler!.Wait(this);
         return this;
     }
 
@@ -331,7 +331,7 @@ public struct JobHandle
     /// </summary>
     public JobHandle Flush()
     {
-        ParallelForJobCommon.GlobalScheduler!.Flush(this);
+        SchedulerCommon.GlobalScheduler!.Flush(this);
         return this;
     }
 

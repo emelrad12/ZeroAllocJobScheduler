@@ -33,8 +33,20 @@ public interface IParallelJobProducer
 
     string GetName()
     {
-        return GetType().FullName;
+        return GetType().Name;
     }
+}
+
+/// <summary>
+/// Gives a hint to the ParallelJobProducer on how many threads to allocate depending on the input count. Default = Large.
+/// </summary>
+public enum ParallelJobProducerJobWeightHint
+{
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Huge
 }
 
 /// <summary>
@@ -51,7 +63,8 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     private readonly JobHandle _sourceHandle;
     private readonly bool _onlySingle;
     private readonly int _loopSize;
-    private static readonly int ChildrenToSplitInto = Environment.ProcessorCount * 8;
+    private static readonly int MaxChildrenToSplitInto = Environment.ProcessorCount * 16;
+    private ParallelJobProducerJobWeightHint hint;
 
     /// <inheritdoc />
     public string GetName()
@@ -65,12 +78,13 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     /// <param name="from">Where the loop starts</param>
     /// <param name="to">Maximum to loop to</param>
     /// <param name="producer">The job to call</param>
-    /// <param name="source"></param>
+    /// <param name="source">The job that will trigger this one.</param>
     /// <param name="loopSize">Size of the loop, useful for when you want to use vectorization</param>
     /// <param name="onlySingle">Makes sure you can ignore the end parameter in the IParallelJobProducer, and use start as index</param>
     /// <param name="singleThreaded">Whether the job producer should not spawn children</param>
-    public ParallelJobProducer(int from, int to, T producer, int loopSize = 16, bool onlySingle = false, JobHandle source = default, bool singleThreaded = false)
+    public ParallelJobProducer(int from, int to, T producer, int loopSize = 16, bool onlySingle = false, JobHandle source = default, bool singleThreaded = false, ParallelJobProducerJobWeightHint hint = ParallelJobProducerJobWeightHint.Medium)
     {
+        this.hint = hint;
         _sourceHandle = source;
         _from = from;
         _to = to;
@@ -81,12 +95,13 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
         {
             throw new ArgumentException($"Invalid range from {_from} to {_to}");
         }
+
         if (to - from == 1)
         {
             singleThreaded = true; // If the range is only 1, we can just run it single threaded
         }
 
-        _selfHandle = ParallelForJobCommon.GlobalScheduler!.Schedule(singleThreaded ? this : null);
+        _selfHandle = SchedulerCommon.GlobalScheduler!.Schedule(singleThreaded ? this : null);
         if (!source.IsNull)
         {
             _selfHandle.SetDependsOn(source);
@@ -108,9 +123,10 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
         {
             throw new ArgumentException($"Invalid range from {_from} to {_to}");
         }
+
         _loopSize = loopSize;
         _onlySingle = onlySingle;
-        _selfHandle = ParallelForJobCommon.GlobalScheduler!.Schedule(this, parent);
+        _selfHandle = SchedulerCommon.GlobalScheduler!.Schedule(this, parent);
         if (!source.IsNull)
         {
             _selfHandle.SetDependsOn(source);
@@ -151,10 +167,21 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     /// <returns>The amount.</returns>
     private int CalculateChildrenToSplitInto()
     {
-        // If you change this also change the bulk queue segment size.
-        // This should be equal to the number of threads(or that times 2/3?) but for now it's just a constant
         var range = _to - _from;
-        return range < ChildrenToSplitInto ? range : ChildrenToSplitInto;
+        var maxChildren = int.Min(_to - _from, MaxChildrenToSplitInto);
+        // The larger the job the more we want it to be split.
+        // hint = ParallelJobProducerJobWeightHint.Medium;
+        var pointerForHint = hint switch
+        {
+            ParallelJobProducerJobWeightHint.Huge => 1,
+            ParallelJobProducerJobWeightHint.Large => 5,
+            ParallelJobProducerJobWeightHint.Medium => 25,
+            ParallelJobProducerJobWeightHint.Small => 200,
+            ParallelJobProducerJobWeightHint.Tiny => 1000,
+            _ => throw new ArgumentOutOfRangeException(nameof(hint), hint, null)
+        };
+        var desiredToSplit = range / pointerForHint;
+        return int.Clamp(desiredToSplit, 1, maxChildren);
     }
 
     /// <summary>
@@ -163,7 +190,7 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
     /// <returns>If a split occured</returns>
     private bool CheckAndSplit()
     {
-        if (CalculateChildrenToSplitInto() <= 1)
+        if (CalculateChildrenToSplitInto() < 1)
         {
             return false;
         }
@@ -184,7 +211,6 @@ public struct ParallelJobProducer<T> : IJob where T : IParallelJobProducer
         }
 
         var childrenToSplitInto = CalculateChildrenToSplitInto();
-        BulkQueue<JobHandle>.Segment segment = default;
 
         for (var i = 0; i < childrenToSplitInto; i++)
         {

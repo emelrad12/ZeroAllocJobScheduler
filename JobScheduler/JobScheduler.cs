@@ -1,3 +1,5 @@
+using Schedulers.Utils;
+
 [assembly: CLSCompliant(true)]
 
 namespace Schedulers;
@@ -166,7 +168,24 @@ public class JobScheduler : IDisposable
 
             if (nextJob)
             {
+                WorkerPerformanceEvent recording = default;
+                if (SchedulerCommon.ProfilingEnabled)
+                {
+                    if (stolenJob.Job != null)
+                    {
+                        recording = MainThreadPerformanceEvents.StartRecording(stolenJob.Job, 1);
+                    }
+                }
+
                 stolenJob.Job?.Execute();
+                if (SchedulerCommon.ProfilingEnabled)
+                {
+                    if (stolenJob.Job != null)
+                    {
+                        MainThreadPerformanceEvents.Submit(recording);
+                    }
+                }
+
                 Finish(stolenJob);
             }
 

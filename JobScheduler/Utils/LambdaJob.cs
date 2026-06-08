@@ -12,6 +12,11 @@ public class LambdaJob
         {
             action();
         }
+
+        public string GetName()
+        {
+            return (action.Method.DeclaringType?.FullName ?? "Unknown") + "." + action.Method.Name;
+        }
     }
 
     /// <summary>
@@ -23,7 +28,7 @@ public class LambdaJob
     public static JobHandle Create(Action action, JobHandle source = default)
     {
         var job = new JobProducer(action);
-        var handle = ParallelForJobCommon.GlobalScheduler!.Schedule(job);
+        var handle = SchedulerCommon.GlobalScheduler!.Schedule(job);
         if (!source.IsNull)
         {
             handle.SetDependsOn(source);
